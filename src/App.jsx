@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import logoMacedo from "./assets/logo-macedo.png";
+
+/* Slogan oficial da marca */
+const SLOGAN = "O lar começa aqui.";
 
 /* ============================ ARMAZENAMENTO ============================ */
 /* Persistência local no navegador via IndexedDB (sem servidor).
@@ -138,11 +142,15 @@ function comprimir(arquivo, ladoMaximo, qualidade) {
 /* ================================ ESTILO ================================ */
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap');
 
-.mac { --tinta:#0F3149; --tinta2:#1B5273; --porcelana:#EEF1F4; --papel:#FFFFFF;
-  --pimenta:#C4322B; --milho:#E0A029; --musgo:#2F7D5B; --grafite:#3C4B57; --linha:#D3DBE2;
-  font-family:'IBM Plex Sans',system-ui,sans-serif; color:var(--tinta);
+/* Identidade visual Macedo Utilidades:
+   Azul principal #2B5F8E · Laranja acento #E8711A · Tipografia Montserrat */
+.mac { --azul:#2B5F8E; --azul-esc:#244E75; --azul-claro:#5486B0;
+  --laranja:#E8711A; --laranja-esc:#CF6011;
+  --tinta:#22384A; --tinta2:#2B5F8E; --porcelana:#FAF6F0; --papel:#FFFFFF;
+  --pimenta:#E8711A; --milho:#E0A029; --musgo:#2F7D5B; --grafite:#5A6B78; --linha:#E9E2D8;
+  font-family:'Montserrat',system-ui,sans-serif; color:var(--tinta);
   background:var(--porcelana); min-height:100vh; -webkit-font-smoothing:antialiased; }
 .mac *{box-sizing:border-box;}
 .mac button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
@@ -151,14 +159,18 @@ const CSS = `
 .mac input:focus,.mac select:focus,.mac textarea:focus{outline:2px solid var(--tinta2);outline-offset:1px;border-color:var(--tinta2);}
 .mac :focus-visible{outline:2px solid var(--tinta2);outline-offset:2px;}
 
-.esmalte{background-color:var(--tinta);
-  background-image:radial-gradient(rgba(255,255,255,.20) 1.1px,transparent 1.5px),
-                   radial-gradient(rgba(255,255,255,.12) 1px,transparent 1.4px);
+/* Superfície azul esmaltada (esmalte/enamelware) — painel, PIN e topo da reserva */
+.esmalte{background-color:var(--azul);
+  background-image:radial-gradient(rgba(255,255,255,.17) 1.1px,transparent 1.5px),
+                   radial-gradient(rgba(255,255,255,.10) 1px,transparent 1.4px);
   background-size:15px 15px,24px 24px; background-position:0 0,8px 12px;}
 
-.display{font-family:'Archivo',system-ui,sans-serif;font-weight:900;letter-spacing:-.03em;line-height:.95;}
-.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:600;font-variant-numeric:tabular-nums;}
-.rotulo{font-family:'Archivo',sans-serif;font-weight:700;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;}
+/* Cabeçalho claro da vitrine, com a logo da marca */
+.topo-claro{background:var(--papel);border-bottom:1px solid var(--linha);padding:16px 0 18px;color:var(--tinta);}
+
+.display{font-family:'Montserrat',sans-serif;font-weight:800;letter-spacing:-.02em;line-height:1.03;}
+.num{font-family:'Montserrat',sans-serif;font-weight:600;font-variant-numeric:tabular-nums;font-feature-settings:'tnum';}
+.rotulo{font-family:'Montserrat',sans-serif;font-weight:700;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;}
 
 .env{max-width:1080px;margin:0 auto;padding:0 16px;}
 .topo{padding:22px 0 26px;color:#fff;}
@@ -195,7 +207,7 @@ const CSS = `
   font-family:'Archivo',sans-serif;font-weight:700;letter-spacing:.07em;text-transform:uppercase;}
 .t-ok{background:#E4F0EA;color:var(--musgo);}
 .t-baixo{background:#FBF0DA;color:#96660F;}
-.t-fora{background:#F5E3E2;color:var(--pimenta);}
+.t-fora{background:#EAEEF2;color:#5A6B78;}
 .t-neutro{background:var(--porcelana);color:var(--grafite);}
 
 .painel-cx{background:var(--papel);border:1px solid var(--linha);border-radius:12px;padding:16px;}
@@ -250,6 +262,7 @@ export default function App() {
             nome: "Macedo Utilidades",
             cidade: "Jacobina, BA",
             whatsapp: "",
+            instagram: "@macedo.casa",
             horario: "Seg a Sex, 8h às 18h · Sáb, 8h às 12h",
             pin: "1234",
             horasExpiracao: 48,
@@ -417,23 +430,25 @@ function Vitrine({ loja, produtos, abrirPainel, abrirProduto }) {
 
   return (
     <>
-      <header className="esmalte topo">
+      <header className="topo-claro">
         <div className="env">
           <div className="linha-topo">
-            <div>
-              <div className="rotulo" style={{ opacity: 0.72, marginBottom: 6 }}>
-                Catálogo · {loja.cidade}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              <img src={logoMacedo} alt={loja.nome} style={{ height: 56, width: "auto", flexShrink: 0 }} />
+              <div style={{ borderLeft: "2.5px solid var(--laranja)", paddingLeft: 12, minWidth: 0 }}>
+                <div className="display" style={{ fontSize: 16, color: "var(--azul)", lineHeight: 1.08 }}>
+                  {SLOGAN}
+                </div>
+                <div className="rotulo" style={{ color: "var(--grafite)", marginTop: 5 }}>
+                  {loja.cidade}
+                </div>
               </div>
-              <h1 className="display" style={{ fontSize: "clamp(30px,8vw,50px)", margin: 0 }}>
-                {loja.nome}
-              </h1>
             </div>
-            <button className="btn btn-p" onClick={abrirPainel}
-              style={{ background: "rgba(255,255,255,.14)", color: "#fff", flexShrink: 0 }}>
+            <button className="btn btn-p btn-3" onClick={abrirPainel} style={{ flexShrink: 0 }}>
               Painel
             </button>
           </div>
-          <p style={{ marginTop: 14, marginBottom: 0, fontSize: 14, opacity: 0.82, maxWidth: 460 }}>
+          <p style={{ marginTop: 12, marginBottom: 0, fontSize: 13.5, color: "var(--grafite)", maxWidth: 520 }}>
             Escolha o item, reserve pelo site e retire na loja. {loja.horario}
           </p>
         </div>
@@ -481,6 +496,22 @@ function Vitrine({ loja, produtos, abrirPainel, abrirProduto }) {
             {lista.map((p) => <CardProduto key={p.id} p={p} aoClicar={() => abrirProduto(p)} />)}
           </div>
         )}
+
+        <footer style={{ marginTop: 40, paddingTop: 22, borderTop: "1px solid var(--linha)",
+          display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <img src={logoMacedo} alt={loja.nome} style={{ height: 48, width: "auto" }} />
+            <div>
+              <div className="display" style={{ fontSize: 14, color: "var(--azul)" }}>{SLOGAN}</div>
+              <div style={{ fontSize: 12.5, color: "var(--grafite)", marginTop: 3 }}>
+                {loja.cidade} · {loja.horario}
+              </div>
+            </div>
+          </div>
+          {loja.instagram && (
+            <div className="rotulo" style={{ color: "var(--laranja)" }}>{loja.instagram}</div>
+          )}
+        </footer>
       </div>
     </>
   );
@@ -1253,6 +1284,11 @@ function AbaAjustes({ loja, salvarLoja, notificar }) {
       <div className="campo">
         <label htmlFor="a-hor">Horário de funcionamento</label>
         <input id="a-hor" value={f.horario} onChange={(e) => campo("horario", e.target.value)} />
+      </div>
+      <div className="campo">
+        <label htmlFor="a-insta">Instagram</label>
+        <input id="a-insta" value={f.instagram || ""} onChange={(e) => campo("instagram", e.target.value)}
+          placeholder="@macedo.casa" />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <div className="campo">
