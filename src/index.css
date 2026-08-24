@@ -1,0 +1,12 @@
+/* Reset mínimo do navegador. Não altera a identidade visual do app,
+   apenas remove a margem padrão do body e evita flash branco. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+body {
+  background: #eef1f4; /* --porcelana */
+}
