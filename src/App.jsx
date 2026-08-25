@@ -1,61 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import logoMacedo from "./assets/logo-macedo.png";
+import {
+  carregarLoja, salvarLojaDb, listarPublicados, listarTodosProdutos, listarReservas,
+  salvarProduto, ajustarProduto, criarReserva, aprovarReserva, recusarReserva,
+  registrarVendaLoja, expirarReservas, subirFoto, sessaoAtual, entrar, sair, aoMudarAuth,
+} from "./dados";
+import { supabase } from "./supabase";
 
 /* Slogan oficial da marca */
 const SLOGAN = "O lar começa aqui.";
-
-/* ============================ ARMAZENAMENTO ============================ */
-/* Persistência local no navegador via IndexedDB (sem servidor).
-   Os dados ficam salvos apenas neste dispositivo/navegador. */
-
-const K = {
-  produtos: "catalogo:produtos",
-  reservas: "catalogo:reservas",
-  loja: "catalogo:loja",
-  fotos: (id) => `catalogo:fotos:${id}`,
-};
-
-const BANCO = "catalogo-macedo";
-const TABELA = "kv";
-
-function abrirBanco() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(BANCO, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(TABELA);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function ler(chave, padrao) {
-  try {
-    const db = await abrirBanco();
-    const texto = await new Promise((resolve, reject) => {
-      const req = db.transaction(TABELA, "readonly").objectStore(TABELA).get(chave);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-    return texto ? JSON.parse(texto) : padrao;
-  } catch (e) {
-    return padrao;
-  }
-}
-
-async function gravar(chave, valor) {
-  const texto = JSON.stringify(valor);
-  try {
-    const db = await abrirBanco();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(TABELA, "readwrite");
-      tx.objectStore(TABELA).put(texto, chave);
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => reject(tx.error);
-    });
-    return true;
-  } catch (e) {
-    throw new Error("Não foi possível salvar. O armazenamento do navegador pode estar cheio.");
-  }
-}
 
 /* ============================== UTILIDADES ============================== */
 
@@ -104,8 +57,6 @@ const abrirWhats = (tel, msg) => {
 };
 
 const disponivel = (p) => Math.max(0, (p.quantidadeTotal || 0) - (p.quantidadeReservada || 0));
-
-const novoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 const dataCurta = (iso) =>
   new Date(iso).toLocaleDateString("pt-BR", {
@@ -244,6 +195,7 @@ export default function App() {
   const [produtos, setProdutos] = useState([]);
   const [reservas, setReservas] = useState([]);
   const [loja, setLoja] = useState(null);
+  const [sessao, setSessao] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [falha, setFalha] = useState("");
   const [aviso, setAviso] = useState("");
@@ -254,57 +206,59 @@ export default function App() {
     setTimeout(() => setAviso(""), 3400);
   }, []);
 
+  /* Recarrega do banco. Vendedor logado enxerga tudo; público só o publicado. */
+  const recarregar = useCallback(async (temSessao) => {
+    if (temSessao) {
+      const [ps, rs] = await Promise.all([listarTodosProdutos(), listarReservas()]);
+      setProdutos(ps);
+      setReservas(rs);
+    } else {
+      setProdutos(await listarPublicados());
+      setReservas([]);
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
-        let cfg = await ler(K.loja, null);
-        if (!cfg) {
-          cfg = {
-            nome: "Macedo Utilidades",
-            cidade: "Jacobina, BA",
-            whatsapp: "",
-            instagram: "@macedo.casa",
-            horario: "Seg a Sex, 8h às 18h · Sáb, 8h às 12h",
-            pin: "1234",
-            horasExpiracao: 48,
-          };
-          await gravar(K.loja, cfg);
-        }
-        const [ps, rs] = await Promise.all([ler(K.produtos, []), ler(K.reservas, [])]);
-        const { ps2, rs2, expirou } = expirarPendentes(ps, rs, cfg.horasExpiracao);
-        if (expirou) {
-          await gravar(K.produtos, ps2);
-          await gravar(K.reservas, rs2);
-        }
-        setLoja(cfg);
-        setProdutos(ps2);
-        setReservas(rs2);
+        const sess = await sessaoAtual();
+        setSessao(sess);
+        await expirarReservas().catch(() => {});
+        const cfg = await carregarLoja();
+        setLoja(cfg || {
+          nome: "Macedo Utilidades", cidade: "Jacobina, BA", whatsapp: "",
+          instagram: "@macedo.casa", horario: "", horasExpiracao: 48,
+        });
+        await recarregar(!!sess);
       } catch (e) {
-        setFalha("Não consegui carregar o catálogo. Recarregue a página.");
+        setFalha("Não consegui carregar o catálogo. Verifique a conexão e recarregue a página.");
       } finally {
         setCarregando(false);
       }
     })();
-  }, []);
 
-  /* Grava sempre relendo antes, para não sobrescrever o que outro
-     dispositivo salvou nesse meio tempo. */
-  const alterar = useCallback(async (fn) => {
-    const [ps, rs] = await Promise.all([ler(K.produtos, []), ler(K.reservas, [])]);
-    const r = fn(ps, rs);
-    if (r.produtos) {
-      await gravar(K.produtos, r.produtos);
-      setProdutos(r.produtos);
-    }
-    if (r.reservas) {
-      await gravar(K.reservas, r.reservas);
-      setReservas(r.reservas);
-    }
-    return r;
-  }, []);
+    // Reage a login/logout e mantém o painel em dia
+    const { data: sub } = aoMudarAuth((s) => {
+      setSessao(s);
+      recarregar(!!s).catch(() => {});
+    });
+
+    // Atualiza a vitrine ao vivo quando o estoque muda (esgotado na hora)
+    const canal = supabase
+      .channel("produtos-ao-vivo")
+      .on("postgres_changes", { event: "*", schema: "public", table: "produtos" }, () => {
+        setSessao((s) => { recarregar(!!s).catch(() => {}); return s; });
+      })
+      .subscribe();
+
+    return () => {
+      sub?.subscription?.unsubscribe?.();
+      supabase.removeChannel(canal);
+    };
+  }, [recarregar]);
 
   const salvarLoja = async (nova) => {
-    await gravar(K.loja, nova);
+    await salvarLojaDb(nova);
     setLoja(nova);
   };
 
@@ -349,10 +303,13 @@ export default function App() {
           loja={loja}
           produtos={produtos}
           reservas={reservas}
-          alterar={alterar}
+          sessao={sessao}
+          entrar={entrar}
           salvarLoja={salvarLoja}
           notificar={notificar}
+          recarregar={recarregar}
           sair={() => setTela("vitrine")}
+          sairConta={async () => { await sair(); setTela("vitrine"); }}
         />
       ) : (
         <Vitrine
@@ -368,8 +325,9 @@ export default function App() {
           produto={produtos.find((p) => p.id === selecionado.id) || selecionado}
           loja={loja}
           fechar={() => setSelecionado(null)}
-          alterar={alterar}
           notificar={notificar}
+          recarregar={recarregar}
+          logado={!!sessao}
         />
       )}
 
@@ -388,24 +346,6 @@ export default function App() {
       {aviso && <div className="aviso">{aviso}</div>}
     </div>
   );
-}
-
-/* =========================== REGRAS DE ESTOQUE =========================== */
-
-function expirarPendentes(produtos, reservas, horas) {
-  const agora = Date.now();
-  let expirou = false;
-  const ps = produtos.map((p) => ({ ...p }));
-  const rs = reservas.map((r) => {
-    if (r.status !== "pendente") return r;
-    const limite = new Date(r.criadaEm).getTime() + (horas || 48) * 3600 * 1000;
-    if (agora < limite) return r;
-    expirou = true;
-    const p = ps.find((x) => x.id === r.produtoId);
-    if (p) p.quantidadeReservada = Math.max(0, (p.quantidadeReservada || 0) - r.quantidade);
-    return { ...r, status: "expirada" };
-  });
-  return { ps2: ps, rs2: rs, expirou };
 }
 
 /* ================================ VITRINE ================================ */
@@ -549,21 +489,14 @@ function CardProduto({ p, aoClicar }) {
 
 /* ============================= TELA DO PRODUTO ============================= */
 
-function TelaProduto({ produto, loja, fechar, alterar, notificar }) {
-  const [fotos, setFotos] = useState(null);
+function TelaProduto({ produto, loja, fechar, notificar, recarregar }) {
   const [i, setI] = useState(0);
   const [reservando, setReservando] = useState(false);
 
-  useEffect(() => {
-    let vivo = true;
-    ler(K.fotos(produto.id), []).then((f) => {
-      if (vivo) setFotos(f && f.length ? f : produto.capa ? [produto.capa] : []);
-    });
-    return () => { vivo = false; };
-  }, [produto.id]);
-
   const d = disponivel(produto);
-  const galeria = fotos || (produto.capa ? [produto.capa] : []);
+  const galeria = produto.fotos && produto.fotos.length
+    ? produto.fotos
+    : (produto.capa ? [produto.capa] : []);
 
   return (
     <div className="folha" onClick={fechar} role="dialog" aria-label={produto.nome}>
@@ -632,8 +565,8 @@ function TelaProduto({ produto, loja, fechar, alterar, notificar }) {
         <FormReserva
           produto={produto}
           loja={loja}
-          alterar={alterar}
           notificar={notificar}
+          recarregar={recarregar}
           fechar={() => setReservando(false)}
           concluir={() => { setReservando(false); fechar(); }}
         />
@@ -644,7 +577,7 @@ function TelaProduto({ produto, loja, fechar, alterar, notificar }) {
 
 /* ============================ FORMULÁRIO RESERVA ============================ */
 
-function FormReserva({ produto, loja, alterar, notificar, fechar, concluir }) {
+function FormReserva({ produto, loja, notificar, recarregar, fechar, concluir }) {
   const [nome, setNome] = useState("");
   const [tel, setTel] = useState("");
   const [qtd, setQtd] = useState(1);
@@ -658,21 +591,11 @@ function FormReserva({ produto, loja, alterar, notificar, fechar, concluir }) {
     setErro("");
     setEnviando(true);
     try {
-      const r = await alterar((ps, rs) => {
-        const p = ps.find((x) => x.id === produto.id);
-        if (!p) return { erro: "Este item saiu do catálogo." };
-        if (disponivel(p) < qtd) return { erro: "Alguém reservou antes. Restam " + disponivel(p) + "." };
-        const atualizados = ps.map((x) =>
-          x.id === p.id ? { ...x, quantidadeReservada: (x.quantidadeReservada || 0) + qtd } : x
-        );
-        const reserva = {
-          id: novoId(), produtoId: p.id, produtoNome: p.nome, precoUnitario: precoAtual(p),
-          quantidade: qtd, nomeCliente: nome.trim(), telefoneCliente: tel,
-          observacao: obs.trim(), status: "pendente", criadaEm: new Date().toISOString(),
-        };
-        return { produtos: atualizados, reservas: [reserva, ...rs] };
+      await criarReserva({
+        produtoId: produto.id, quantidade: qtd, nome: nome.trim(),
+        telefone: tel, observacao: obs.trim(),
       });
-      if (r.erro) { setErro(r.erro); setEnviando(false); return; }
+      await recarregar(false);
 
       if (loja.whatsapp) {
         abrirWhats(
@@ -754,36 +677,59 @@ function FormReserva({ produto, loja, alterar, notificar, fechar, concluir }) {
 
 /* ================================= PAINEL ================================= */
 
-function Painel({ loja, produtos, reservas, alterar, salvarLoja, notificar, sair }) {
-  const [liberado, setLiberado] = useState(false);
-  const [pin, setPin] = useState("");
+function LoginVendedor({ entrar, sair }) {
+  const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
+  const [entrando, setEntrando] = useState(false);
+
+  const acessar = async () => {
+    if (!email.trim() || !senha) return setErro("Preencha e-mail e senha.");
+    setErro("");
+    setEntrando(true);
+    try {
+      await entrar(email.trim(), senha);
+      // O App detecta o login e carrega o painel automaticamente.
+    } catch (e) {
+      setErro(e.message || "Não consegui entrar.");
+      setEntrando(false);
+    }
+  };
+
+  return (
+    <div className="esmalte" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "var(--porcelana)", padding: 26, borderRadius: 14, width: "100%", maxWidth: 360 }}>
+        <div className="rotulo" style={{ color: "var(--grafite)" }}>Acesso do vendedor</div>
+        <h2 className="display" style={{ fontSize: 25, margin: "6px 0 18px" }}>Entrar no painel</h2>
+        <div className="campo">
+          <label htmlFor="lg-email">E-mail</label>
+          <input id="lg-email" type="email" autoComplete="username" value={email} autoFocus
+            onChange={(e) => { setEmail(e.target.value); setErro(""); }} />
+        </div>
+        <div className="campo">
+          <label htmlFor="lg-senha">Senha</label>
+          <input id="lg-senha" type="password" autoComplete="current-password" value={senha}
+            onChange={(e) => { setSenha(e.target.value); setErro(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter") acessar(); }} />
+        </div>
+        {erro && <div style={{ color: "var(--pimenta)", fontSize: 13.5, marginBottom: 12 }}>{erro}</div>}
+        <button className="btn btn-2" style={{ width: "100%" }} onClick={acessar} disabled={entrando}>
+          {entrando ? "Entrando..." : "Entrar"}
+        </button>
+        <button className="btn btn-3" style={{ width: "100%", marginTop: 8 }} onClick={sair}>
+          Voltar ao catálogo
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Painel({ loja, produtos, reservas, sessao, entrar, salvarLoja, notificar, recarregar, sair, sairConta }) {
   const [aba, setAba] = useState("reservas");
   const [editando, setEditando] = useState(null);
 
-  if (!liberado) {
-    return (
-      <div className="esmalte" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <div style={{ background: "var(--porcelana)", padding: 26, borderRadius: 14, width: "100%", maxWidth: 340 }}>
-          <div className="rotulo" style={{ color: "var(--grafite)" }}>Acesso do vendedor</div>
-          <h2 className="display" style={{ fontSize: 25, margin: "6px 0 18px" }}>Entrar no painel</h2>
-          <div className="campo">
-            <label htmlFor="pin">PIN</label>
-            <input id="pin" type="password" inputMode="numeric" value={pin} autoFocus
-              onChange={(e) => { setPin(e.target.value); setErro(""); }}
-              onKeyDown={(e) => { if (e.key === "Enter") { pin === loja.pin ? setLiberado(true) : setErro("PIN incorreto."); } }} />
-          </div>
-          {erro && <div style={{ color: "var(--pimenta)", fontSize: 13.5, marginBottom: 12 }}>{erro}</div>}
-          <button className="btn btn-2" style={{ width: "100%" }}
-            onClick={() => (pin === loja.pin ? setLiberado(true) : setErro("PIN incorreto."))}>
-            Entrar
-          </button>
-          <button className="btn btn-3" style={{ width: "100%", marginTop: 8 }} onClick={sair}>
-            Voltar ao catálogo
-          </button>
-        </div>
-      </div>
-    );
+  if (!sessao) {
+    return <LoginVendedor entrar={entrar} sair={sair} />;
   }
 
   const pendentes = reservas.filter((r) => r.status === "pendente");
@@ -807,8 +753,12 @@ function Painel({ loja, produtos, reservas, alterar, salvarLoja, notificar, sair
               <div className="rotulo" style={{ opacity: 0.7 }}>Painel do vendedor</div>
               <div className="display" style={{ fontSize: 24, marginTop: 3 }}>{loja.nome}</div>
             </div>
-            <button className="btn btn-p" onClick={sair}
-              style={{ background: "rgba(255,255,255,.14)", color: "#fff" }}>Ver catálogo</button>
+            <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+              <button className="btn btn-p" onClick={sair}
+                style={{ background: "rgba(255,255,255,.14)", color: "#fff" }}>Ver catálogo</button>
+              <button className="btn btn-p" onClick={sairConta}
+                style={{ background: "rgba(255,255,255,.14)", color: "#fff" }}>Sair</button>
+            </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginTop: 16 }}>
@@ -835,14 +785,14 @@ function Painel({ loja, produtos, reservas, alterar, salvarLoja, notificar, sair
 
       <div className="env" style={{ paddingTop: 16, paddingBottom: 60 }}>
         {aba === "reservas" && (
-          <AbaReservas reservas={reservas} loja={loja} alterar={alterar} notificar={notificar} />
+          <AbaReservas reservas={reservas} loja={loja} recarregar={recarregar} notificar={notificar} />
         )}
         {aba === "produtos" && (
-          <AbaProdutos produtos={produtos} alterar={alterar} notificar={notificar}
+          <AbaProdutos produtos={produtos} recarregar={recarregar} notificar={notificar}
             editar={(p) => { setEditando(p); setAba("novo"); }} />
         )}
         {aba === "novo" && (
-          <FormProduto produto={editando} alterar={alterar} notificar={notificar}
+          <FormProduto produto={editando} recarregar={recarregar} notificar={notificar}
             aoSalvar={() => { setEditando(null); setAba("produtos"); }} />
         )}
         {aba === "ajustes" && <AbaAjustes loja={loja} salvarLoja={salvarLoja} notificar={notificar} />}
@@ -863,29 +813,16 @@ function Indicador({ rotulo, valor, alerta, pequeno }) {
 
 /* ============================== ABA RESERVAS ============================== */
 
-function AbaReservas({ reservas, loja, alterar, notificar }) {
+function AbaReservas({ reservas, loja, recarregar, notificar }) {
   const [filtro, setFiltro] = useState("pendente");
   const [ocupado, setOcupado] = useState("");
 
   const decidir = async (reserva, aprovar) => {
     setOcupado(reserva.id);
     try {
-      await alterar((ps, rs) => {
-        const produtos = ps.map((p) => {
-          if (p.id !== reserva.produtoId) return p;
-          const reservada = Math.max(0, (p.quantidadeReservada || 0) - reserva.quantidade);
-          return aprovar
-            ? { ...p, quantidadeReservada: reservada,
-                quantidadeTotal: Math.max(0, (p.quantidadeTotal || 0) - reserva.quantidade) }
-            : { ...p, quantidadeReservada: reservada };
-        });
-        const atualizadas = rs.map((r) =>
-          r.id === reserva.id
-            ? { ...r, status: aprovar ? "aprovada" : "recusada", decididaEm: new Date().toISOString() }
-            : r
-        );
-        return { produtos, reservas: atualizadas };
-      });
+      if (aprovar) await aprovarReserva(reserva.id);
+      else await recusarReserva(reserva.id);
+      await recarregar(true);
 
       if (aprovar) {
         abrirWhats(
@@ -976,7 +913,7 @@ function AbaReservas({ reservas, loja, alterar, notificar }) {
 
 /* ============================== ABA PRODUTOS ============================== */
 
-function AbaProdutos({ produtos, alterar, notificar, editar }) {
+function AbaProdutos({ produtos, recarregar, notificar, editar }) {
   const [busca, setBusca] = useState("");
   const [rascunhos, setRascunhos] = useState(false);
   const [vendendo, setVendendo] = useState(null);
@@ -989,13 +926,26 @@ function AbaProdutos({ produtos, alterar, notificar, editar }) {
       return !t || p.nome.toLowerCase().includes(t) || (p.sku || "").toLowerCase().includes(t);
     });
 
+  // campo da interface -> coluna do banco
+  const COLUNA = { preco: "preco", quantidadeTotal: "quantidade_total", status: "status" };
+
   const ajustar = async (id, campo, valor) => {
-    await alterar((ps) => ({ produtos: ps.map((p) => (p.id === id ? { ...p, [campo]: valor } : p)) }));
+    try {
+      await ajustarProduto(id, { [COLUNA[campo]]: valor });
+      await recarregar(true);
+    } catch (e) {
+      notificar(e.message || "Não consegui salvar a alteração.");
+    }
   };
 
   const arquivar = async (p) => {
-    await alterar((ps) => ({ produtos: ps.map((x) => (x.id === p.id ? { ...x, status: "arquivado" } : x)) }));
-    notificar("Item arquivado. Saiu do catálogo público.");
+    try {
+      await ajustarProduto(p.id, { status: "arquivado" });
+      await recarregar(true);
+      notificar("Item arquivado. Saiu do catálogo público.");
+    } catch (e) {
+      notificar(e.message || "Não consegui arquivar o item.");
+    }
   };
 
   return (
@@ -1067,7 +1017,7 @@ function AbaProdutos({ produtos, alterar, notificar, editar }) {
       )}
 
       {vendendo && (
-        <FormVendaLoja produto={vendendo} alterar={alterar} notificar={notificar}
+        <FormVendaLoja produto={vendendo} recarregar={recarregar} notificar={notificar}
           fechar={() => setVendendo(null)} />
       )}
     </>
@@ -1076,7 +1026,7 @@ function AbaProdutos({ produtos, alterar, notificar, editar }) {
 
 /* ========================= REGISTRAR VENDA NA LOJA ========================= */
 
-function FormVendaLoja({ produto, alterar, notificar, fechar }) {
+function FormVendaLoja({ produto, recarregar, notificar, fechar }) {
   const max = disponivel(produto);
   const [qtd, setQtd] = useState("1");
   const [nome, setNome] = useState("");
@@ -1089,23 +1039,10 @@ function FormVendaLoja({ produto, alterar, notificar, fechar }) {
     setErro("");
     setSalvando(true);
     try {
-      const r = await alterar((ps, rs) => {
-        const p = ps.find((x) => x.id === produto.id);
-        if (!p) return { erro: "Este item não existe mais." };
-        const livre = disponivel(p);
-        if (q > livre) return { erro: `Você tem ${livre} em estoque livre para dar baixa.` };
-        const produtos = ps.map((x) =>
-          x.id === p.id ? { ...x, quantidadeTotal: Math.max(0, (x.quantidadeTotal || 0) - q) } : x
-        );
-        const registro = {
-          id: novoId(), produtoId: p.id, produtoNome: p.nome, precoUnitario: precoAtual(p),
-          quantidade: q, nomeCliente: nome.trim() || "Venda na loja", telefoneCliente: "",
-          observacao: obs.trim(), status: "concluída", origem: "venda_loja",
-          criadaEm: new Date().toISOString(), decididaEm: new Date().toISOString(),
-        };
-        return { produtos, reservas: [registro, ...rs] };
+      await registrarVendaLoja({
+        produtoId: produto.id, quantidade: q, nome: nome.trim(), observacao: obs.trim(),
       });
-      if (r.erro) { setErro(r.erro); setSalvando(false); return; }
+      await recarregar(true);
       notificar("Venda registrada e baixada do estoque.");
       fechar();
     } catch (e) {
@@ -1172,7 +1109,7 @@ function FormVendaLoja({ produto, alterar, notificar, fechar }) {
 
 /* ============================ FORMULÁRIO PRODUTO ============================ */
 
-function FormProduto({ produto, alterar, notificar, aoSalvar }) {
+function FormProduto({ produto, recarregar, notificar, aoSalvar }) {
   const [nome, setNome] = useState(produto?.nome || "");
   const [descricao, setDescricao] = useState(produto?.descricao || "");
   const [categoria, setCategoria] = useState(produto?.categoria || CATEGORIAS[0]);
@@ -1186,8 +1123,11 @@ function FormProduto({ produto, alterar, notificar, aoSalvar }) {
   const entrada = useRef(null);
 
   useEffect(() => {
-    if (produto) ler(K.fotos(produto.id), produto.capa ? [produto.capa] : []).then(setFotos);
-    else setFotos([]);
+    if (produto) {
+      setFotos(produto.fotos && produto.fotos.length ? produto.fotos : (produto.capa ? [produto.capa] : []));
+    } else {
+      setFotos([]);
+    }
   }, [produto?.id]);
 
   const receberFotos = async (e) => {
@@ -1223,30 +1163,25 @@ function FormProduto({ produto, alterar, notificar, aoSalvar }) {
     setErro("");
     setSalvando(true);
     try {
-      const id = produto?.id || novoId();
-      const capa = fotos[0] ? await recomprimirCapa(fotos[0]) : "";
+      // Envia as fotos novas ao armazenamento (as que já são URL passam direto)
+      const fotosUrls = [];
+      for (const f of fotos.slice(0, 5)) fotosUrls.push(await subirFoto(f));
 
-      if (fotos.length) await gravar(K.fotos(id), fotos);
+      await salvarProduto({
+        id: produto?.id,
+        sku: produto?.sku || "MU-" + Math.random().toString(36).slice(2, 7).toUpperCase(),
+        nome: nome.trim(),
+        descricao: descricao.trim(),
+        categoria,
+        preco: paraNumero(preco),
+        precoPromocional: paraNumero(promo),
+        quantidadeTotal: Math.max(0, parseInt(qtd) || 0),
+        fotos: fotosUrls,
+        capa: fotosUrls[0] || "",
+        status: publicar ? "publicado" : "rascunho",
+      }, !!produto);
 
-      await alterar((ps) => {
-        const base = {
-          id,
-          sku: produto?.sku || "MU-" + id.slice(-5).toUpperCase(),
-          nome: nome.trim(),
-          descricao: descricao.trim(),
-          categoria,
-          preco: paraNumero(preco),
-          precoPromocional: paraNumero(promo),
-          quantidadeTotal: Math.max(0, parseInt(qtd) || 0),
-          quantidadeReservada: produto?.quantidadeReservada || 0,
-          capa,
-          status: publicar ? "publicado" : "rascunho",
-          criadoEm: produto?.criadoEm || new Date().toISOString(),
-        };
-        const existe = ps.some((p) => p.id === id);
-        return { produtos: existe ? ps.map((p) => (p.id === id ? base : p)) : [base, ...ps] };
-      });
-
+      await recarregar(true);
       notificar(publicar ? "Item publicado no catálogo." : "Rascunho salvo.");
       aoSalvar();
     } catch (e) {
@@ -1338,22 +1273,6 @@ function FormProduto({ produto, alterar, notificar, aoSalvar }) {
   );
 }
 
-function recomprimirCapa(dataUrl) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const escala = Math.min(1, 380 / Math.max(img.width, img.height));
-      const c = document.createElement("canvas");
-      c.width = Math.round(img.width * escala);
-      c.height = Math.round(img.height * escala);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-      resolve(c.toDataURL("image/jpeg", 0.6));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
-}
-
 /* =============================== ABA AJUSTES =============================== */
 
 function AbaAjustes({ loja, salvarLoja, notificar }) {
@@ -1401,20 +1320,18 @@ function AbaAjustes({ loja, salvarLoja, notificar }) {
         <input id="a-insta" value={f.instagram || ""} onChange={(e) => campo("instagram", e.target.value)}
           placeholder="@macedo.casa" />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <div className="campo">
-          <label htmlFor="a-pin">PIN do painel</label>
-          <input id="a-pin" value={f.pin} onChange={(e) => campo("pin", e.target.value)} />
-        </div>
-        <div className="campo">
-          <label htmlFor="a-exp">Reserva expira em (h)</label>
-          <input id="a-exp" className="num" type="number" min="1" value={f.horasExpiracao}
-            onChange={(e) => campo("horasExpiracao", e.target.value)} />
-        </div>
+      <div className="campo">
+        <label htmlFor="a-exp">Reserva expira em (horas)</label>
+        <input id="a-exp" className="num" type="number" min="1" value={f.horasExpiracao}
+          onChange={(e) => campo("horasExpiracao", e.target.value)} />
       </div>
       <button className="btn btn-2" onClick={salvar} disabled={salvando}>
         {salvando ? "Salvando..." : "Salvar ajustes"}
       </button>
+      <p style={{ fontSize: 12.5, color: "var(--grafite)", marginTop: 12 }}>
+        Seu acesso ao painel é feito por e-mail e senha. Para trocar a senha ou
+        adicionar outro vendedor, use o painel do Supabase (Authentication).
+      </p>
     </div>
   );
 }

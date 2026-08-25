@@ -252,7 +252,20 @@ drop policy if exists fotos_vendedor_apaga on storage.objects;
 create policy fotos_vendedor_apaga on storage.objects
   for delete to authenticated using (bucket_id = 'fotos');
 
+-- ----------------------------------------------------- TEMPO REAL
+-- Faz a vitrine atualizar sozinha quando o estoque muda (ex.: item esgota
+-- na hora para os outros visitantes).
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'produtos'
+  ) then
+    alter publication supabase_realtime add table public.produtos;
+  end if;
+end $$;
+
 -- ============================================================================
 -- FIM. Próximo: criar o usuário do vendedor em Authentication → Users → Add user
--- (e-mail + senha), e me enviar a Project URL e a chave anon public.
+-- (e-mail + senha). O site já está ligado a este projeto.
 -- ============================================================================
