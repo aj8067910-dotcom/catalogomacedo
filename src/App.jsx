@@ -209,6 +209,7 @@ const CSS = `
 .t-baixo{background:#FBF0DA;color:#96660F;}
 .t-fora{background:#EAEEF2;color:#5A6B78;}
 .t-neutro{background:var(--porcelana);color:var(--grafite);}
+.t-azul{background:#E4EEF5;color:var(--azul);}
 
 .painel-cx{background:var(--papel);border:1px solid var(--linha);border-radius:12px;padding:16px;}
 .campo{margin-bottom:14px;}
@@ -907,12 +908,12 @@ function AbaReservas({ reservas, loja, alterar, notificar }) {
 
   const lista = reservas.filter((r) => (filtro === "todas" ? true : r.status === filtro));
 
-  const cores = { pendente: "t-baixo", aprovada: "t-ok", recusada: "t-fora", expirada: "t-neutro" };
+  const cores = { pendente: "t-baixo", aprovada: "t-ok", concluída: "t-azul", recusada: "t-fora", expirada: "t-neutro" };
 
   return (
     <>
       <div style={{ display: "flex", gap: 8, marginBottom: 14, overflowX: "auto" }}>
-        {["pendente", "aprovada", "recusada", "expirada", "todas"].map((f) => (
+        {["pendente", "aprovada", "concluída", "recusada", "expirada", "todas"].map((f) => (
           <button key={f} className={"chip" + (filtro === f ? " chip-on" : "")} onClick={() => setFiltro(f)}
             style={{ textTransform: "capitalize" }}>
             {f}
@@ -942,9 +943,14 @@ function AbaReservas({ reservas, loja, alterar, notificar }) {
               </div>
 
               <div style={{ fontSize: 14, color: "var(--grafite)", lineHeight: 1.55 }}>
-                {r.nomeCliente} · {r.telefoneCliente}
+                {r.nomeCliente}{r.telefoneCliente ? ` · ${r.telefoneCliente}` : ""}
+                {r.origem === "venda_loja" && (
+                  <span className="tag t-azul" style={{ marginLeft: 8 }}>Venda na loja</span>
+                )}
                 <br />
-                <span style={{ fontSize: 12.5 }}>Pedida em {dataCurta(r.criadaEm)}</span>
+                <span style={{ fontSize: 12.5 }}>
+                  {r.origem === "venda_loja" ? "Registrada" : "Pedida"} em {dataCurta(r.criadaEm)}
+                </span>
                 {r.observacao && <><br /><em style={{ fontSize: 13.5 }}>“{r.observacao}”</em></>}
               </div>
 
@@ -973,6 +979,7 @@ function AbaReservas({ reservas, loja, alterar, notificar }) {
 function AbaProdutos({ produtos, alterar, notificar, editar }) {
   const [busca, setBusca] = useState("");
   const [rascunhos, setRascunhos] = useState(false);
+  const [vendendo, setVendendo] = useState(null);
 
   const lista = produtos
     .filter((p) => p.status !== "arquivado")
@@ -1041,6 +1048,9 @@ function AbaProdutos({ produtos, alterar, notificar, editar }) {
                 </div>
 
                 <div style={{ display: "flex", gap: 7, marginTop: 11, flexWrap: "wrap" }}>
+                  {disponivel(p) > 0 && (
+                    <button className="btn btn-ok btn-p" onClick={() => setVendendo(p)}>Registrar venda</button>
+                  )}
                   <button className="btn btn-3 btn-p" onClick={() => editar(p)}>Editar</button>
                   <button className="btn btn-3 btn-p"
                     onClick={() => ajustar(p.id, "status", p.status === "publicado" ? "rascunho" : "publicado")}>
@@ -1055,7 +1065,108 @@ function AbaProdutos({ produtos, alterar, notificar, editar }) {
           ))}
         </div>
       )}
+
+      {vendendo && (
+        <FormVendaLoja produto={vendendo} alterar={alterar} notificar={notificar}
+          fechar={() => setVendendo(null)} />
+      )}
     </>
+  );
+}
+
+/* ========================= REGISTRAR VENDA NA LOJA ========================= */
+
+function FormVendaLoja({ produto, alterar, notificar, fechar }) {
+  const max = disponivel(produto);
+  const [qtd, setQtd] = useState("1");
+  const [nome, setNome] = useState("");
+  const [obs, setObs] = useState("");
+  const [erro, setErro] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
+  const confirmar = async () => {
+    const q = Math.max(1, parseInt(qtd) || 0);
+    setErro("");
+    setSalvando(true);
+    try {
+      const r = await alterar((ps, rs) => {
+        const p = ps.find((x) => x.id === produto.id);
+        if (!p) return { erro: "Este item não existe mais." };
+        const livre = disponivel(p);
+        if (q > livre) return { erro: `Você tem ${livre} em estoque livre para dar baixa.` };
+        const produtos = ps.map((x) =>
+          x.id === p.id ? { ...x, quantidadeTotal: Math.max(0, (x.quantidadeTotal || 0) - q) } : x
+        );
+        const registro = {
+          id: novoId(), produtoId: p.id, produtoNome: p.nome, precoUnitario: precoAtual(p),
+          quantidade: q, nomeCliente: nome.trim() || "Venda na loja", telefoneCliente: "",
+          observacao: obs.trim(), status: "concluída", origem: "venda_loja",
+          criadaEm: new Date().toISOString(), decididaEm: new Date().toISOString(),
+        };
+        return { produtos, reservas: [registro, ...rs] };
+      });
+      if (r.erro) { setErro(r.erro); setSalvando(false); return; }
+      notificar("Venda registrada e baixada do estoque.");
+      fechar();
+    } catch (e) {
+      setErro(e.message || "Não consegui registrar a venda.");
+      setSalvando(false);
+    }
+  };
+
+  const total = precoAtual(produto) * (Math.max(1, parseInt(qtd) || 0));
+
+  return (
+    <div className="folha" onClick={fechar} style={{ zIndex: 70 }}>
+      <div className="folha-cx" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 430 }}>
+        <div className="esmalte" style={{ padding: "16px 18px", color: "#fff" }}>
+          <div className="rotulo" style={{ opacity: 0.7 }}>Registrar venda na loja</div>
+          <div className="display" style={{ fontSize: 20, marginTop: 4 }}>{produto.nome}</div>
+        </div>
+        <div style={{ padding: 18 }}>
+          <p style={{ margin: "0 0 14px", fontSize: 13.5, color: "var(--grafite)", lineHeight: 1.5 }}>
+            Para itens vendidos direto na loja, fora do site. O estoque cai de forma
+            definitiva e a venda fica registrada no histórico.
+          </p>
+          <div className="campo">
+            <label htmlFor="v-qtd">Quantidade vendida</label>
+            <input id="v-qtd" className="num" type="number" min="1" max={max} value={qtd}
+              onChange={(e) => setQtd(e.target.value)} />
+            <p style={{ fontSize: 12.5, color: "var(--grafite)", margin: "6px 0 0" }}>
+              {max} em estoque livre
+            </p>
+          </div>
+          <div className="campo">
+            <label htmlFor="v-nome">Cliente (opcional)</label>
+            <input id="v-nome" value={nome} onChange={(e) => setNome(e.target.value)}
+              placeholder="Quem levou o item" />
+          </div>
+          <div className="campo">
+            <label htmlFor="v-obs">Observação (opcional)</label>
+            <textarea id="v-obs" rows={2} value={obs} onChange={(e) => setObs(e.target.value)}
+              placeholder="Forma de pagamento, detalhe da venda..." />
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 14px",
+            borderTop: "1px solid var(--linha)", fontSize: 15 }}>
+            <span>Total da venda</span>
+            <span className="num" style={{ fontSize: 19, color: "var(--pimenta)" }}>{brl(total)}</span>
+          </div>
+
+          {erro && (
+            <div style={{ background: "#F5E3E2", color: "#B5502A", padding: "10px 12px",
+              borderRadius: 8, fontSize: 13.5, marginBottom: 12 }}>{erro}</div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ok" style={{ flex: 1 }} onClick={confirmar} disabled={salvando}>
+              {salvando ? "Registrando..." : "Registrar venda"}
+            </button>
+            <button className="btn btn-3" onClick={fechar}>Cancelar</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
