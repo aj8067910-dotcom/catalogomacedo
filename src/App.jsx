@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import logoMacedo from "./assets/logo-macedo.png";
 import {
   carregarLoja, salvarLojaDb, listarPublicados, listarTodosProdutos, listarReservas,
-  salvarProduto, ajustarProduto, criarReserva, aprovarReserva, recusarReserva,
+  salvarProduto, ajustarProduto, importarProdutos, criarReserva, aprovarReserva, recusarReserva,
   registrarVendaLoja, expirarReservas, subirFoto, sessaoAtual, entrar, sair, aoMudarAuth,
 } from "./dados";
 import { supabase } from "./supabase";
+// A planilha (xlsx) é pesada e só o vendedor usa; carregamos sob demanda.
 
 /* Slogan oficial da marca */
 const SLOGAN = "O lar começa aqui.";
@@ -917,6 +918,39 @@ function AbaProdutos({ produtos, recarregar, notificar, editar }) {
   const [busca, setBusca] = useState("");
   const [rascunhos, setRascunhos] = useState(false);
   const [vendendo, setVendendo] = useState(null);
+  const [importando, setImportando] = useState(false);
+  const arquivoPlan = useRef(null);
+
+  const exportar = async () => {
+    try {
+      const { exportarProdutos } = await import("./planilha");
+      exportarProdutos(produtos.filter((p) => p.status !== "arquivado"));
+    } catch (e) {
+      notificar("Não consegui gerar a planilha.");
+    }
+  };
+
+  const importar = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setImportando(true);
+    try {
+      const { lerPlanilha } = await import("./planilha");
+      const linhas = await lerPlanilha(file);
+      const r = await importarProdutos(linhas);
+      await recarregar(true);
+      notificar(
+        `Importado: ${r.inseridos} novo(s)` +
+        (r.atualizados ? `, ${r.atualizados} atualizado(s)` : "") +
+        (r.ignoradas ? `, ${r.ignoradas} linha(s) ignorada(s)` : "") + "."
+      );
+    } catch (er) {
+      notificar(er.message || "Não consegui importar a planilha.");
+    } finally {
+      setImportando(false);
+      if (arquivoPlan.current) arquivoPlan.current.value = "";
+    }
+  };
 
   const lista = produtos
     .filter((p) => p.status !== "arquivado")
@@ -950,6 +984,18 @@ function AbaProdutos({ produtos, recarregar, notificar, editar }) {
 
   return (
     <>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <button className="btn btn-3 btn-p" onClick={exportar}>⬇ Exportar Excel</button>
+        <button className="btn btn-3 btn-p" onClick={() => arquivoPlan.current?.click()} disabled={importando}>
+          {importando ? "Importando..." : "⬆ Importar Excel"}
+        </button>
+        <input ref={arquivoPlan} type="file" accept=".xlsx,.xls,.csv"
+          onChange={importar} style={{ display: "none" }} />
+        <span style={{ fontSize: 12, color: "var(--grafite)" }}>
+          Baixe a planilha, preencha e importe para cadastrar vários itens de uma vez.
+        </span>
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <input placeholder="Buscar item" value={busca} onChange={(e) => setBusca(e.target.value)} />
         <button className={"chip" + (rascunhos ? " chip-on" : "")} onClick={() => setRascunhos(!rascunhos)}>

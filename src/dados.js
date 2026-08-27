@@ -109,6 +109,57 @@ export async function ajustarProduto(id, campos) {
   if (error) throw new Error(error.message);
 }
 
+// Cadastro em massa a partir das linhas de uma planilha (Excel/CSV).
+// Linha com "id" preenchido ATUALIZA o item; sem "id" cria um novo.
+export async function importarProdutos(linhas) {
+  const STATUS_OK = ["publicado", "rascunho", "arquivado"];
+  const inserir = [];
+  const atualizar = [];
+  let ignoradas = 0;
+
+  for (const l of linhas || []) {
+    const nome = String(l.nome ?? "").trim();
+    const preco = paraNumeroPlan(l.preco);
+    if (!nome || preco <= 0) { ignoradas++; continue; }
+
+    const st = String(l.status ?? "").trim().toLowerCase();
+    const base = {
+      nome,
+      descricao: String(l.descricao ?? "").trim(),
+      categoria: String(l.categoria ?? "").trim() || "Outros",
+      preco,
+      preco_promocional: paraNumeroPlan(l.preco_promocional),
+      quantidade_total: Math.max(0, parseInt(l.quantidade_total, 10) || 0),
+      status: STATUS_OK.includes(st) ? st : "rascunho",
+    };
+
+    const id = String(l.id ?? "").trim();
+    if (id) atualizar.push({ id, ...base });
+    else inserir.push({ ...base, sku: "MU-" + Math.random().toString(36).slice(2, 7).toUpperCase() });
+  }
+
+  let inseridos = 0, atualizados = 0;
+  if (inserir.length) {
+    const { error } = await supabase.from("produtos").insert(inserir);
+    if (error) throw new Error(error.message);
+    inseridos = inserir.length;
+  }
+  if (atualizar.length) {
+    const { error } = await supabase.from("produtos").upsert(atualizar, { onConflict: "id" });
+    if (error) throw new Error(error.message);
+    atualizados = atualizar.length;
+  }
+  return { inseridos, atualizados, ignoradas };
+}
+
+// Aceita número (célula numérica) ou texto no formato brasileiro ("1.234,56").
+function paraNumeroPlan(v) {
+  if (typeof v === "number") return isNaN(v) ? 0 : v;
+  const s = String(v ?? "").replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
 /* -------------------------------------------------------------- RESERVAS */
 
 export async function listarReservas() {
